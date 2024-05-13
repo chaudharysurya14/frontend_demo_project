@@ -1,0 +1,102 @@
+pipeline {
+    agent any
+    tools{
+        jdk 'java17'
+        maven 'maven3'
+    }
+    environment {
+      SCANNER_HOME = tool 'SonarQube-Scanner'
+      SONAR_SERVER = 'sonarqube_hrms2'
+    }
+    stages {
+        // stage('clean workspace'){
+        //     steps{
+        //         cleanWs()
+        //     }
+        // }
+        stage ('Initialize') {
+            steps {
+                echo '================================ Path Initialization ====================================='
+                sh '''
+                echo "PATH = ${PATH}"
+                echo "M2_HOME = ${M2_HOME}"
+            '''
+            }
+        }
+        stage ('Software Composition Analysis') {
+            steps {
+                echo '============================ Software composition Analysis=============================='
+                dependencyCheck additionalArguments: ''' 
+                    -o "./" 
+                    -s "./"
+                    -f "ALL" 
+                    --prettyPrint''', odcInstallation: 'Owasp-DP'
+                dependencyCheckPublisher pattern: 'dependency-check-report.xml'
+            }
+        }
+        stage ('Static Analysis') {
+            steps {
+                echo '==============================code scanning by SonarScanner==================================='
+                withSonarQubeEnv ('sonarqube_hrmis2') {
+                    sh '''${SCANNER_HOME}/bin/sonar-scanner \
+                    -Dsonar.projectKey=CDAC_CINE_Profile_demo \
+                    -Dsonar.sources=. \
+                    -Dsonar.java.binaries=/var/lib/jenkins/workspace/CDAC_CINE_Profile_demo/src/ \
+                    -Dsonar.host.url=https://sonarqube02.cdaccine.in \
+                    -Dsonar.token=sqp_8cc7ba16630e15e8101293b21d7283dda9bbb646 \
+                    -Dsonar.svn.username=surya \
+                    -Dsonar.svn.password.secured=318333 '''
+                }
+            }
+        }
+        // stage('Generate and compile') {
+        //     steps {
+        //         echo '============================== SOFTWARE COMPILE =============================='
+        //         sh "mvn compile"
+        //     }
+        // }
+        // stage('Test Application'){
+        //     steps{
+        //         echo '=============================== SOFTWARE TEST =============================='
+        //         sh 'mvn test'
+        //     }
+        // }
+        // stage('Delete old Application'){
+        //     steps{
+        //         echo '============================== DELETE OLD BUILD SOFTWARE =============================='
+        //         sh 'mvn clean package'
+        //     }
+        // }
+        stage('Build Application'){
+            steps{
+                echo '============================== APPLICATION BUILDING =============================='
+                sh 'mvn clean install'
+            }
+        }
+        stage ('Application Release') {
+            steps {
+                echo '============================== RELEASING APPLICATION =============================='
+                sshagent(['application_server']) {
+                    sh 'scp -o StrictHostKeyChecking=no /var/lib/jenkins/workspace/CDAC_CINE_Profile_demo/webapp/target/webapp.war root@10.248.0.124:/opt/tomcat/webapps/'
+                }
+            }
+        }
+        stage ('Deploy on tomcat') {
+            steps {
+                echo '============================== DEPLOY ON TOMCAT =============================='
+                    sshagent(['application_server']) {
+                    // sh 'ssh -o  StrictHostKeyChecking=no root@192.168.80.10 "bash /opt/tomcat/bin/shutdown.sh"'
+                    sh 'ssh -o  StrictHostKeyChecking=no root@10.248.0.124 "bash /opt/tomcat/bin/startup.sh"'
+                }
+            }
+        }
+        stage ('Dynamic analysis') {
+            steps {
+                echo '============================== DYNAMIC ANALYSIS  =============================='
+                sshagent(['application_server']) {
+                    sh 'ssh -o  StrictHostKeyChecking=no root@10.248.0.124 "docker run --rm -v /root:/zap/wrk/:rw -t owasp/zap2docker-stable zap-full-scan.py -t https://production.cdaccine.in/webapp -x > zap_report || true"'
+	            }
+            }
+        }
+    }
+}
